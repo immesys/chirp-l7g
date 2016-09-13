@@ -15,7 +15,7 @@ type dataProcessingAlgorithm struct {
 	Initialize func(e Emitter)
 }
 
-// Encapsulates information added by the layer 7 gateway point of presence
+// L7GHeader encapsulates information added by the layer 7 gateway point of presence
 type L7GHeader struct {
 	// The MAC (8 bytes) of the sending anemometer, hex encoded
 	Srcmac string `msgpack:"srcmac"`
@@ -35,7 +35,7 @@ type L7GHeader struct {
 	Payload []byte `msgpack:"payload"`
 }
 
-// Encapsulates the raw information transmitted by the anemometer.
+// ChirpHeader encapsulates the raw information transmitted by the anemometer.
 type ChirpHeader struct {
 	// This field can be ignored, it is used by the forward error correction layer
 	Type int
@@ -56,8 +56,9 @@ type ChirpHeader struct {
 }
 
 // RunDPA will execute a data processing algorithm. Pass it a function that will be invoked whenever
-// new data arrives. This function does not return
-func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)) {
+// new data arrives. You must pass it an initializer function, an on-data funchion and then
+// your name (the vendor) and the name of the algorithm. This function does not return
+func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter), vendor string, algorithm string) {
 	a := dataProcessingAlgorithm{}
 	cl := bw2bind.ConnectOrExit("")
 	a.BWCL = cl
@@ -139,8 +140,10 @@ type OutputData struct {
 	// The symbol name of the sensor (like a variable name, no spaces etc)
 	Sensor string `msgpack:"sensor"`
 	// The name of the vendor (you) that wrote the data processing algorithm, also variable characters only
+	// This gets set to the value passed to RunDPA automatically
 	Vendor string `msgpack:"vendor"`
 	// The symbol name of the algorithm, including version, parameters. also variable characters only
+	// This gets set to the value passed to RunDPA automatically
 	Algorithm string `msgpack:"algorithm"`
 	// The set of time of flights in this output data set
 	Tofs []TOFMeasure `msgpack:"tofs"`
@@ -148,7 +151,7 @@ type OutputData struct {
 	Extradata []string `msgpack:"extradata"`
 }
 
-// An emitter is used to report OutputData that you have generated
+// Emitter is used to report OutputData that you have generated
 type Emitter interface {
 	// Emit an output data set
 	Data(OutputData)
