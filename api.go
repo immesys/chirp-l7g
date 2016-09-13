@@ -1,39 +1,66 @@
-package main
+package chirpl7g
 
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
 
 	"gopkg.in/immesys/bw2bind.v5"
 )
 
-const AlgVer = "ref_1_0__passthrough"
-const Vendor = "UCBerkeley"
+type dataProcessingAlgorithm struct {
+	BWCL      *bw2bind.BW2Client
+	Vendor    string
+	Algorithm string
+	Process   func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)
+}
 
+// Encapsulates information added by the layer 7 gateway point of presence
 type L7GHeader struct {
-	Srcmac  string `msgpack:"srcmac"`
-	Srcip   string `msgpack:"srcip"`
-	Popid   string `msgpack:"popid"`
-	Poptime int64  `msgpack:"poptime"`
-	Brtime  int64  `msgpack:"brtime"`
-	Rssi    int    `msgpack:"rssi"`
-	Lqi     int    `msgpack:"lqi"`
+	// The MAC (8 bytes) of the sending anemometer, hex encoded
+	Srcmac string `msgpack:"srcmac"`
+	// The source ipv6 address of the sending anemometer, may not be globally routed
+	Srcip string `msgpack:"srcip"`
+	// The identifier of the point of presence that detected the packet. Used for duplicate detection
+	Popid string `msgpack:"popid"`
+	// The time on the point of presence (in us), may not be absolute wall time
+	Poptime int64 `msgpack:"poptime"`
+	// The time on the border router when the message was transmitted on bosswave, nanoseconds since the epoch
+	Brtime int64 `msgpack:"brtime"`
+	// The RSSI of the received packet, used for ranging
+	Rssi int `msgpack:"rssi"`
+	// The link quality indicator of the received packet, may not always be useful
+	Lqi int `msgpack:"lqi"`
+	// The raw payload of the packet, you should not need this as this is decoded into the ChirpHeader structure for you
 	Payload []byte `msgpack:"payload"`
 }
+
+// Encapsulates the raw information transmitted by the anemometer.
 type ChirpHeader struct {
-	Type     int
-	Build    int
-	Seqno    uint16
+	// This field can be ignored, it is used by the forward error correction layer
+	Type int
+	// This field is incremented for every measurement transmitted. It can be used for detecting missing packets
+	Seqno uint16
+	// This is the build number (firmware version) programmed on the sensor
+	Build int
+	// This is the length of the calibration pulse (in ms)
 	CalPulse uint16
-	CalRes   []uint16
-	Uptime   uint64
-	Primary  uint8
-	Data     [][]byte
+	// This is array of ticks that each asic measured the calibration pulse as
+	CalRes []uint16
+	// This is how long the anemometer has been running, in microseconds
+	Uptime uint64
+	// This is the number of the ASIC that was in OPMODE_TXRX, the rest were in OPMODE_RX
+	Primary uint8
+	// The four 70 byte arrays of raw data from the ASICs
+	Data [][]byte
 }
 
-func main() {
+// Launch a data processing algorithm. Pass it a function that will be invoked whenever
+// new data arrives. This function does not return
+func RunDPA(cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)) {
+	a := dataProcessingAlgorithm{}
 	cl := bw2bind.ConnectOrExit("")
+	a.BWCL = cl
+	a.Process = cb
 	cl.SetEntityFromEnvironOrExit()
 	ch := cl.SubscribeOrExit(&bw2bind.SubscribeParams{
 		URI:       "ucberkeley/sasc/+/s.hamilton/+/i.l7g/signal/raw",
@@ -50,21 +77,20 @@ func main() {
 			continue
 		}
 		ch := ChirpHeader{}
-		LoadChirpHeader(h.Payload, &ch)
-		od := Deliver(&h, &ch)
-		if od != nil {
-			PublishOData(cl, od)
-		}
+		loadChirpHeader(h.Payload, &ch)
+		a.Process(&h, &ch, &a)
 	}
 }
-func PublishOData(cl *bw2bind.BW2Client, od *Odata) {
-	URI := fmt.Sprintf("ucberkeley/anemometer/data/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm)
+func (a *dataProcessingAlgorithm) Data(od OutputData) {
+	od.Vendor = a.Vendor
+	od.Algorithm = a.Algorithm
+	URI := fmt.Sprintf("ucberkeley/anemometer/data/%s/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm, od.Sensor)
 	fmt.Println("uri is: ", URI)
 	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, od)
 	if err != nil {
 		panic(err)
 	}
-	err = cl.Publish(&bw2bind.PublishParams{
+	err = a.BWCL.Publish(&bw2bind.PublishParams{
 		URI:            URI,
 		AutoChain:      true,
 		PayloadObjects: []bw2bind.PayloadObject{po},
@@ -73,7 +99,7 @@ func PublishOData(cl *bw2bind.BW2Client, od *Odata) {
 		fmt.Println("Got publish error: ", err)
 	}
 }
-func LoadChirpHeader(arr []byte, h *ChirpHeader) {
+func loadChirpHeader(arr []byte, h *ChirpHeader) {
 	h.Type = int(arr[0])
 	h.Seqno = binary.LittleEndian.Uint16(arr[1:])
 	h.Build = int(binary.LittleEndian.Uint16(arr[3:]))
@@ -90,104 +116,37 @@ func LoadChirpHeader(arr []byte, h *ChirpHeader) {
 		h.Data[i] = arr[24+70*i : 24+70*(i+1)]
 	}
 }
-func Deliver(popHdr *L7GHeader, h *ChirpHeader) *Odata {
-	magic_count_tx := -4
-	odata := Odata{
-		Timestamp: popHdr.Brtime,
-		Sensor:    popHdr.Srcmac,
-		Vendor:    Vendor,
-		Algorithm: AlgVer,
-	}
-	for set := 0; set < 4; set++ {
-		if int(h.Primary) == set {
-			continue
-		}
-		//There are actually four sets of data, one from each chip
-		data := h.Data[set]
 
-		//The first six bytes of the data
-		tof_sf := binary.LittleEndian.Uint16(data[0:2])
-		tof_est := binary.LittleEndian.Uint16(data[2:4])
-		intensity := binary.LittleEndian.Uint16(data[4:6])
-
-		//Load the complex numbers
-		iz := make([]int16, 16)
-		qz := make([]int16, 16)
-		for i := 0; i < 16; i++ {
-			qz[i] = int16(binary.LittleEndian.Uint16(data[6+4*i:]))
-			iz[i] = int16(binary.LittleEndian.Uint16(data[6+4*i+2:]))
-		}
-
-		//Find the largest complex magnitude (as a square)
-		magsqr := make([]uint64, 16)
-		magmax := uint64(0)
-		for i := 0; i < 16; i++ {
-			magsqr[i] = uint64(int64(qz[i])*int64(qz[i]) + int64(iz[i])*int64(iz[i]))
-			if magsqr[i] > magmax {
-				magmax = magsqr[i]
-			}
-		}
-
-		//Find the first index to be greater than half the max (quarter the square)
-		quarter := magmax / 4
-		less_idx := 0
-		greater_idx := 0
-		for i := 0; i < 16; i++ {
-			if magsqr[i] < quarter {
-				less_idx = i
-			}
-			if magsqr[i] > quarter {
-				greater_idx = i
-				break
-			}
-		}
-		if greater_idx == 0 {
-			odata.Extradata = append(odata.Extradata, "Scale error!")
-			fmt.Println("[DATA ERROR] scale is wrong")
-			continue
-		}
-
-		less_val := math.Sqrt(float64(magsqr[less_idx]))
-		greater_val := math.Sqrt(float64(magsqr[greater_idx]))
-		half_val := math.Sqrt(float64(quarter))
-		//CalPulse is in microseconds
-		freq := float64(tof_sf) / 2048 * float64(h.CalRes[set]) / (float64(h.CalPulse) / 1000)
-		lerp_idx := float64(less_idx) + (half_val-less_val)/(greater_val-less_val)
-		tof := (lerp_idx + float64(magic_count_tx)) / freq * 8
-		fmt.Printf("SEQ %d ASIC %d primary=%d\n", h.Seqno, set, h.Primary)
-		fmt.Println("lerp_idx: ", lerp_idx)
-		fmt.Println("tof_sf: ", tof_sf)
-		fmt.Println("freq: ", freq)
-		fmt.Printf("tof: %.2f us\n", tof*1000000)
-		fmt.Println("intensity: ", intensity)
-		fmt.Println("tof chip estimate: ", tof_est)
-		fmt.Println("tof 50us estimate: ", lerp_idx*50)
-		fmt.Println("data: ")
-		for i := 0; i < 16; i++ {
-			fmt.Printf(" [%2d] %6d + %6di (%.2f)\n", i, qz[i], iz[i], math.Sqrt(float64(magsqr[i])))
-		}
-		fmt.Println(".")
-
-		odata.Tofs = append(odata.Tofs, TOFMeasure{
-			Src: int(h.Primary),
-			Dst: set,
-			Val: tof * 1000000,
-		})
-	}
-	return &odata
-}
-
+// TOFMeasure is a single time of flight measurement. The time of the measurement
+// is ingerited from the OutputData that contains it
 type TOFMeasure struct {
-	Src int     `msgpack:"src"`
-	Dst int     `msgpack:"dst"`
+	// SRC is the index [0,4) of the ASIC that emitted the chirp
+	Src int `msgpack:"src"`
+	// DST is the index [0,4) of the ASIC that the TOF was read from
+	Dst int `msgpack:"dst"`
+	// Val is the time of flight, in microseconds
 	Val float64 `msgpack:"val"`
 }
 
-type Odata struct {
-	Timestamp int64        `msgpack:"time"`
-	Sensor    string       `msgpack:"sensor"`
-	Vendor    string       `msgpack:"vendor"`
-	Algorithm string       `msgpack:"algorithm"`
-	Tofs      []TOFMeasure `msgpack:"tofs"`
-	Extradata []string     `msgpack:"extradata"`
+// OutputData encapsulates a single set of measurements taken at roughly the same
+// time
+type OutputData struct {
+	// The time, in nanoseconds since the epoch, that this set of measurements was taken
+	Timestamp int64 `msgpack:"time"`
+	// The symbol name of the sensor (like a variable name, no spaces etc)
+	Sensor string `msgpack:"sensor"`
+	// The name of the vendor (you) that wrote the data processing algorithm, also variable characters only
+	Vendor string `msgpack:"vendor"`
+	// The symbol name of the algorithm, including version, parameters. also variable characters only
+	Algorithm string `msgpack:"algorithm"`
+	// The set of time of flights in this output data set
+	Tofs []TOFMeasure `msgpack:"tofs"`
+	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
+	Extradata []string `msgpack:"extradata"`
+}
+
+// An emitter is used to report OutputData that you have generated
+type Emitter interface {
+	// Emit an output data set
+	Data(OutputData)
 }
