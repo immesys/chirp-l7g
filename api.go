@@ -8,10 +8,11 @@ import (
 )
 
 type dataProcessingAlgorithm struct {
-	BWCL      *bw2bind.BW2Client
-	Vendor    string
-	Algorithm string
-	Process   func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)
+	BWCL       *bw2bind.BW2Client
+	Vendor     string
+	Algorithm  string
+	Process    func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)
+	Initialize func(e Emitter)
 }
 
 // Encapsulates information added by the layer 7 gateway point of presence
@@ -54,18 +55,20 @@ type ChirpHeader struct {
 	Data [][]byte
 }
 
-// Launch a data processing algorithm. Pass it a function that will be invoked whenever
+// RunDPA will execute a data processing algorithm. Pass it a function that will be invoked whenever
 // new data arrives. This function does not return
-func RunDPA(cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)) {
+func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)) {
 	a := dataProcessingAlgorithm{}
 	cl := bw2bind.ConnectOrExit("")
 	a.BWCL = cl
 	a.Process = cb
+	a.Initialize = iz
 	cl.SetEntityFromEnvironOrExit()
 	ch := cl.SubscribeOrExit(&bw2bind.SubscribeParams{
 		URI:       "ucberkeley/sasc/+/s.hamilton/+/i.l7g/signal/raw",
 		AutoChain: true,
 	})
+	a.Initialize(&a)
 	for m := range ch {
 		po := m.GetOnePODF(bw2bind.PODFL7G1Raw).(bw2bind.MsgPackPayloadObject)
 		h := L7GHeader{}
