@@ -134,6 +134,14 @@ type TOFMeasure struct {
 	Val float64 `msgpack:"val"`
 }
 
+type VelocityMeasure struct {
+	//Velocity in m/s
+	X float64
+	Y float64
+	//Z is the vertical dimension
+	Z float64
+}
+
 // OutputData encapsulates a single set of measurements taken at roughly the same
 // time
 type OutputData struct {
@@ -149,6 +157,8 @@ type OutputData struct {
 	Algorithm string `msgpack:"algorithm"`
 	// The set of time of flights in this output data set
 	Tofs []TOFMeasure `msgpack:"tofs"`
+	// The set of velocities in this output data set
+	Velocities []VelocityMeasure `msgpack:"velocities"`
 	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
 	Extradata []string `msgpack:"extradata"`
 }
