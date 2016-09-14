@@ -64,6 +64,8 @@ func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emi
 	a.BWCL = cl
 	a.Process = cb
 	a.Initialize = iz
+	a.Vendor = vendor
+	a.Algorithm = algorithm
 	cl.SetEntityFromEnvironOrExit()
 	ch := cl.SubscribeOrExit(&bw2bind.SubscribeParams{
 		URI:       "ucberkeley/sasc/+/s.hamilton/+/i.l7g/signal/raw",
