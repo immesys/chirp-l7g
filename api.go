@@ -91,7 +91,6 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 	od.Vendor = a.Vendor
 	od.Algorithm = a.Algorithm
 	URI := fmt.Sprintf("ucberkeley/anemometer/data/%s/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm, od.Sensor)
-	fmt.Println("uri is: ", URI)
 	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, od)
 	if err != nil {
 		panic(err)
@@ -103,6 +102,8 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 	})
 	if err != nil {
 		fmt.Println("Got publish error: ", err)
+	} else {
+		fmt.Println("Publish ok")
 	}
 }
 func loadChirpHeader(arr []byte, h *ChirpHeader) {
@@ -136,10 +137,10 @@ type TOFMeasure struct {
 
 type VelocityMeasure struct {
 	//Velocity in m/s
-	X float64
-	Y float64
+	X float64 `msgpack:"x"`
+	Y float64 `msgpack:"y"`
 	//Z is the vertical dimension
-	Z float64
+	Z float64 `msgpack:"z"`
 }
 
 // OutputData encapsulates a single set of measurements taken at roughly the same
