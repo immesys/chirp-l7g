@@ -8,11 +8,14 @@ import (
 )
 
 type dataProcessingAlgorithm struct {
-	BWCL       *bw2bind.BW2Client
-	Vendor     string
-	Algorithm  string
-	Process    func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)
-	Initialize func(e Emitter)
+	BWCL          *bw2bind.BW2Client
+	Vendor        string
+	Algorithm     string
+	Process       func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)
+	Initialize    func(e Emitter)
+	Uncorrectable map[string]int
+	Total         map[string]int
+	Correctable   map[string]int
 }
 
 // L7GHeader encapsulates information added by the layer 7 gateway point of presence
@@ -72,6 +75,10 @@ func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emi
 		AutoChain: true,
 	})
 	a.Initialize(&a)
+	lastseq := make(map[string]int)
+	a.Uncorrectable = make(map[string]int)
+	a.Total = make(map[string]int)
+
 	for m := range ch {
 		po := m.GetOnePODF(bw2bind.PODFL7G1Raw).(bw2bind.MsgPackPayloadObject)
 		h := L7GHeader{}
@@ -82,8 +89,32 @@ func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emi
 			fmt.Println("Skipping packet", h.Payload[0])
 			continue
 		}
+
 		ch := ChirpHeader{}
 		loadChirpHeader(h.Payload, &ch)
+		lastseqi, ok := lastseq[h.Srcmac]
+		if !ok {
+			lastseqi = int(ch.Seqno - 1)
+		}
+		uncorrectablei, ok := a.Uncorrectable[h.Srcmac]
+		if !ok {
+			uncorrectablei = 0
+		}
+		lastseqi++
+		lastseqi &= 0xFFFF
+		if int(ch.Seqno) != lastseqi {
+			uncorrectablei++
+			lastseqi = int(ch.Seqno)
+		}
+		lastseq[h.Srcmac] = lastseqi
+		a.Uncorrectable[h.Srcmac] = uncorrectablei
+		totali, ok := a.Total[h.Srcmac]
+		if !ok {
+			totali = 0
+		}
+		totali++
+		a.Total[h.Srcmac] = totali
+
 		a.Process(&h, &ch, &a)
 	}
 }
@@ -91,7 +122,12 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 	od.Vendor = a.Vendor
 	od.Algorithm = a.Algorithm
 	URI := fmt.Sprintf("ucberkeley/anemometer/data/%s/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm, od.Sensor)
-	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, od)
+	wod := wrappedOData{}
+	wod.OutputData = od
+	wod.Uncorrectable, _ = a.Uncorrectable[od.Sensor]
+	wod.Total, _ = a.Total[od.Sensor]
+	wod.Correctable, _ = a.Correctable[od.Sensor]
+	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, wod)
 	if err != nil {
 		panic(err)
 	}
@@ -162,6 +198,13 @@ type OutputData struct {
 	Velocities []VelocityMeasure `msgpack:"velocities"`
 	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
 	Extradata []string `msgpack:"extradata"`
+}
+
+type wrappedOData struct {
+	OutputData
+	Uncorrectable int `msgpack:"uncorrectable"`
+	Correctable   int `msgpack:"correctable"`
+	Total         int `msgpack:"total"`
 }
 
 // Emitter is used to report OutputData that you have generated
