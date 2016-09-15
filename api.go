@@ -131,10 +131,15 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 	if err != nil {
 		panic(err)
 	}
+	doPersist := false
+	if wod.Total%200 < 5 {
+		doPersist = true
+	}
 	err = a.BWCL.Publish(&bw2bind.PublishParams{
 		URI:            URI,
 		AutoChain:      true,
 		PayloadObjects: []bw2bind.PayloadObject{po},
+		Persist:        doPersist,
 	})
 	if err != nil {
 		fmt.Println("Got publish error: ", err)
