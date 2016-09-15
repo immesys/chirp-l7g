@@ -122,17 +122,15 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 	od.Vendor = a.Vendor
 	od.Algorithm = a.Algorithm
 	URI := fmt.Sprintf("ucberkeley/anemometer/data/%s/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm, od.Sensor)
-	wod := wrappedOData{}
-	wod.OutputData = od
-	wod.Uncorrectable, _ = a.Uncorrectable[od.Sensor]
-	wod.Total, _ = a.Total[od.Sensor]
-	wod.Correctable, _ = a.Correctable[od.Sensor]
-	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, wod)
+	od.Uncorrectable, _ = a.Uncorrectable[od.Sensor]
+	od.Total, _ = a.Total[od.Sensor]
+	od.Correctable, _ = a.Correctable[od.Sensor]
+	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, od)
 	if err != nil {
 		panic(err)
 	}
 	doPersist := false
-	if wod.Total%200 < 5 {
+	if od.Total%200 < 5 {
 		doPersist = true
 	}
 	err = a.BWCL.Publish(&bw2bind.PublishParams{
@@ -202,14 +200,10 @@ type OutputData struct {
 	// The set of velocities in this output data set
 	Velocities []VelocityMeasure `msgpack:"velocities"`
 	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
-	Extradata []string `msgpack:"extradata"`
-}
-
-type wrappedOData struct {
-	OutputData
-	Uncorrectable int `msgpack:"uncorrectable"`
-	Correctable   int `msgpack:"correctable"`
-	Total         int `msgpack:"total"`
+	Extradata     []string `msgpack:"extradata"`
+	Uncorrectable int      `msgpack:"uncorrectable"`
+	Correctable   int      `msgpack:"correctable"`
+	Total         int      `msgpack:"total"`
 }
 
 // Emitter is used to report OutputData that you have generated
