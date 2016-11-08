@@ -82,16 +82,18 @@ func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emi
 	for m := range ch {
 		po := m.GetOnePODF(bw2bind.PODFL7G1Raw).(bw2bind.MsgPackPayloadObject)
 		h := L7GHeader{}
-		//	fmt.Println(po.TextRepresentation())
 		po.ValueInto(&h)
-		//	fmt.Printf("%#v, po: %#v\n", h, po)
-		if h.Payload[0] > 20 {
-			fmt.Println("Skipping packet", h.Payload[0])
+		if h.Payload[2] > 20 {
+			//Skip the xor packets for now
+			//fmt.Println("Skipping packet", h.Payload[0])
 			continue
 		}
 
 		ch := ChirpHeader{}
-		loadChirpHeader(h.Payload, &ch)
+		isAnemometer := loadChirpHeader(h.Payload, &ch)
+		if !isAnemometer {
+			continue
+		}
 		lastseqi, ok := lastseq[h.Srcmac]
 		if !ok {
 			lastseqi = int(ch.Seqno - 1)
@@ -145,22 +147,43 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 		fmt.Println("Publish ok")
 	}
 }
-func loadChirpHeader(arr []byte, h *ChirpHeader) {
-	h.Type = int(arr[0])
-	h.Seqno = binary.LittleEndian.Uint16(arr[1:])
-	h.Build = int(binary.LittleEndian.Uint16(arr[3:]))
-	h.CalPulse = binary.LittleEndian.Uint16(arr[5:])
+
+/*
+33 typedef struct __attribute__((packed))
+34 {
+35   uint16_t l7type;
+36   uint8_t type;
+37   uint16_t seqno;
+38   uint16_t build;
+39   uint16_t cal_pulse;
+40   uint16_t calres[4];
+41   uint64_t uptime;
+42   uint8_t primary;
+43   uint8_t data[4][70];
+44 } measure_set_t;
+*/
+func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
+	//Drop the type info we added
+	ht := binary.LittleEndian.Uint16(arr)
+	if ht != 7 {
+		return false
+	}
+	h.Type = int(arr[2])
+	h.Seqno = binary.LittleEndian.Uint16(arr[3:])
+	h.Build = int(binary.LittleEndian.Uint16(arr[5:]))
+	h.CalPulse = binary.LittleEndian.Uint16(arr[7:])
 	h.CalRes = make([]uint16, 4)
 	for i := 0; i < 4; i++ {
-		h.CalRes[i] = binary.LittleEndian.Uint16(arr[7+2*i:])
+		h.CalRes[i] = binary.LittleEndian.Uint16(arr[9+2*i:])
 	}
-	//15
-	h.Uptime = binary.LittleEndian.Uint64(arr[15:])
-	h.Primary = arr[23]
+	//17
+	h.Uptime = binary.LittleEndian.Uint64(arr[17:])
+	h.Primary = arr[25]
 	h.Data = make([][]byte, 4)
 	for i := 0; i < 4; i++ {
-		h.Data[i] = arr[24+70*i : 24+70*(i+1)]
+		h.Data[i] = arr[26+70*i : 26+70*(i+1)]
 	}
+	return true
 }
 
 // TOFMeasure is a single time of flight measurement. The time of the measurement
