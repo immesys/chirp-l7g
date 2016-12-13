@@ -79,7 +79,18 @@ func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emi
 	a.Uncorrectable = make(map[string]int)
 	a.Total = make(map[string]int)
 
-	for m := range ch {
+	procCH := make(chan *bw2bind.SimpleMessage, 1000)
+	go func() {
+		for m := range ch {
+			select {
+			case procCH <- m:
+			default:
+				fmt.Printf("dropping message\n")
+			}
+		}
+	}()
+
+	for m := range procCH {
 		po := m.GetOnePODF(bw2bind.PODFL7G1Raw).(bw2bind.MsgPackPayloadObject)
 		h := L7GHeader{}
 		po.ValueInto(&h)
@@ -144,7 +155,7 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 	if err != nil {
 		fmt.Println("Got publish error: ", err)
 	} else {
-		fmt.Println("Publish ok")
+		//fmt.Println("Publish ok")
 	}
 }
 
