@@ -28,7 +28,9 @@ type dataProcessingAlgorithm struct {
 	Correctable   map[string]int
 }
 
-func _runDPA(entitycontents []byte, iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter), vendor string, algorithm string) error {
+func runDPA(entitycontents []byte, iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter), vendor string, algorithm string) error {
+	infoc := color.New(color.FgBlue, color.Bold)
+	errc := color.New(color.FgRed, color.Bold)
 	go func() {
 		defer func() {
 			r := recover()
@@ -37,7 +39,7 @@ func _runDPA(entitycontents []byte, iz func(e Emitter), cb func(popHdr *L7GHeade
 				os.Exit(1)
 			}
 		}()
-		ragentlib.DoClientER([]byte(ourEntity), serverIP, serverVK, "127.0.0.1:28588")
+		ragentlib.DoClientER([]byte(entitycontents), serverIP, serverVK, "127.0.0.1:28588")
 	}()
 	time.Sleep(200 * time.Millisecond)
 
@@ -55,8 +57,7 @@ func _runDPA(entitycontents []byte, iz func(e Emitter), cb func(popHdr *L7GHeade
 	if err != nil {
 		return err
 	}
-	infoc := color.New(color.FgBlue, color.Bold)
-	errc := color.New(color.FgRed, color.Bold)
+
 	infoc.Printf("tapping hamilton feeds\n")
 	ch, err := cl.Subscribe(&bw2bind.SubscribeParams{
 		URI:       fmt.Sprintf("ucberkeley/anem/+/+/s.hamilton/+/i.l7g/signal/raw"),

@@ -63,7 +63,7 @@ type ChirpHeader struct {
 // new data arrives. You must pass it an initializer function, an on-data funchion and then
 // your name (the vendor) and the name of the algorithm. This function does not return
 func RunDPA(entitycontents []byte, iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter), vendor string, algorithm string) error {
-	return _runDPA(entitycontents, iz, cb, vendor, algorithm)
+	return runDPA(entitycontents, iz, cb, vendor, algorithm)
 }
 
 // TOFMeasure is a single time of flight measurement. The time of the measurement
