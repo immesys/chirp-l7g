@@ -1,25 +1,9 @@
 package chirpl7g
 
-import (
-	"encoding/binary"
-	"fmt"
-
-	"gopkg.in/immesys/bw2bind.v5"
-)
-
-type dataProcessingAlgorithm struct {
-	BWCL          *bw2bind.BW2Client
-	Vendor        string
-	Algorithm     string
-	Process       func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)
-	Initialize    func(e Emitter)
-	Uncorrectable map[string]int
-	Total         map[string]int
-	Correctable   map[string]int
-}
-
 // L7GHeader encapsulates information added by the layer 7 gateway point of presence
 type L7GHeader struct {
+	// The site that this data is from
+	Site string `msgpack:"-"`
 	// The MAC (8 bytes) of the sending anemometer, hex encoded
 	Srcmac string `msgpack:"srcmac"`
 	// The source ipv6 address of the sending anemometer, may not be globally routed
@@ -45,162 +29,45 @@ type ChirpHeader struct {
 	// This field is incremented for every measurement transmitted. It can be used for detecting missing packets
 	Seqno uint16
 	// This is the build number (firmware version) programmed on the sensor
+	// duct anemometers end in 5 and room anemometers end in 0
 	Build int
 	// This is the length of the calibration pulse (in ms)
-	CalPulse uint16
+	CalPulse int
 	// This is array of ticks that each asic measured the calibration pulse as
-	CalRes []uint16
-	// This is how long the anemometer has been running, in microseconds
-	Uptime uint64
+	// Only the Primary field is filled in, the other fields will contain -1
+	CalRes []int
 	// This is the number of the ASIC that was in OPMODE_TXRX, the rest were in OPMODE_RX
 	Primary uint8
-	// The four 70 byte arrays of raw data from the ASICs
-	Data [][]byte
+	// The IQ indexes where the maximum occurs
+	// the Primary will have -1
+	MaxIndex []int
+
+	// The IQ values leading up to and including the maximum. There will always
+	// be four values, so if the maximum is <=3 we will start at 0 and include
+	// some points after the maximum. The primary index will have nil slices
+	IValues [][]int
+	QValues [][]int
+
+	// The accelerometer values, X,Y,Z in milli G
+	Accelerometer []float64
+	// The magnetometer values X,Y,Z in micro tesla
+	Magnetometer []float64
+
+	// Air temperature as measured by the Hamilton in Celsius
+	Temperature float64
+	// Air relative humidity as measured by the hamilton in percent
+	Humidity float64
 }
 
 // RunDPA will execute a data processing algorithm. Pass it a function that will be invoked whenever
 // new data arrives. You must pass it an initializer function, an on-data funchion and then
 // your name (the vendor) and the name of the algorithm. This function does not return
-func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter), vendor string, algorithm string) {
-	a := dataProcessingAlgorithm{}
-	cl := bw2bind.ConnectOrExit("")
-	a.BWCL = cl
-	a.Process = cb
-	a.Initialize = iz
-	a.Vendor = vendor
-	a.Algorithm = algorithm
-	cl.SetEntityFromEnvironOrExit()
-	fmt.Printf("doing sub \n")
-	ch := cl.SubscribeOrExit(&bw2bind.SubscribeParams{
-		URI:       "ucberkeley/sasc/+/s.hamilton/+/i.l7g/signal/dedup",
-		AutoChain: true,
-	})
-	fmt.Printf("sub done\n")
-	a.Initialize(&a)
-	lastseq := make(map[string]int)
-	a.Uncorrectable = make(map[string]int)
-	a.Total = make(map[string]int)
-
-	procCH := make(chan *bw2bind.SimpleMessage, 1000)
-	go func() {
-		for m := range ch {
-			select {
-			case procCH <- m:
-			default:
-				fmt.Printf("dropping message\n")
-			}
-		}
-	}()
-
-	for m := range procCH {
-		po := m.GetOnePODF(bw2bind.PODFL7G1Raw).(bw2bind.MsgPackPayloadObject)
-		h := L7GHeader{}
-		po.ValueInto(&h)
-		if h.Payload[2] > 20 {
-			//Skip the xor packets for now
-			//fmt.Println("Skipping packet", h.Payload[0])
-			continue
-		}
-
-		ch := ChirpHeader{}
-		isAnemometer := loadChirpHeader(h.Payload, &ch)
-		if !isAnemometer {
-			continue
-		}
-		lastseqi, ok := lastseq[h.Srcmac]
-		if !ok {
-			lastseqi = int(ch.Seqno - 1)
-		}
-		uncorrectablei, ok := a.Uncorrectable[h.Srcmac]
-		if !ok {
-			uncorrectablei = 0
-		}
-		lastseqi++
-		lastseqi &= 0xFFFF
-		if int(ch.Seqno) != lastseqi {
-			uncorrectablei++
-			lastseqi = int(ch.Seqno)
-		}
-		lastseq[h.Srcmac] = lastseqi
-		a.Uncorrectable[h.Srcmac] = uncorrectablei
-		totali, ok := a.Total[h.Srcmac]
-		if !ok {
-			totali = 0
-		}
-		totali++
-		a.Total[h.Srcmac] = totali
-
-		a.Process(&h, &ch, &a)
-	}
-}
-func (a *dataProcessingAlgorithm) Data(od OutputData) {
-	od.Vendor = a.Vendor
-	od.Algorithm = a.Algorithm
-	URI := fmt.Sprintf("ucberkeley/anemometer/data/%s/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm, od.Sensor)
-	od.Uncorrectable, _ = a.Uncorrectable[od.Sensor]
-	od.Total, _ = a.Total[od.Sensor]
-	od.Correctable, _ = a.Correctable[od.Sensor]
-	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, od)
-	if err != nil {
-		panic(err)
-	}
-	doPersist := false
-	if od.Total%200 < 5 {
-		doPersist = true
-	}
-	err = a.BWCL.Publish(&bw2bind.PublishParams{
-		URI:            URI,
-		AutoChain:      true,
-		PayloadObjects: []bw2bind.PayloadObject{po},
-		Persist:        doPersist,
-	})
-	if err != nil {
-		fmt.Println("Got publish error: ", err)
-	} else {
-		//fmt.Println("Publish ok")
-	}
-}
-
-/*
-33 typedef struct __attribute__((packed))
-34 {
-35   uint16_t l7type;
-36   uint8_t type;
-37   uint16_t seqno;
-38   uint16_t build;
-39   uint16_t cal_pulse;
-40   uint16_t calres[4];
-41   uint64_t uptime;
-42   uint8_t primary;
-43   uint8_t data[4][70];
-44 } measure_set_t;
-*/
-func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
-	//Drop the type info we added
-	ht := binary.LittleEndian.Uint16(arr)
-	if ht != 7 {
-		return false
-	}
-	h.Type = int(arr[2])
-	h.Seqno = binary.LittleEndian.Uint16(arr[3:])
-	h.Build = int(binary.LittleEndian.Uint16(arr[5:]))
-	h.CalPulse = binary.LittleEndian.Uint16(arr[7:])
-	h.CalRes = make([]uint16, 4)
-	for i := 0; i < 4; i++ {
-		h.CalRes[i] = binary.LittleEndian.Uint16(arr[9+2*i:])
-	}
-	//17
-	h.Uptime = binary.LittleEndian.Uint64(arr[17:])
-	h.Primary = arr[25]
-	h.Data = make([][]byte, 4)
-	for i := 0; i < 4; i++ {
-		h.Data[i] = arr[26+70*i : 26+70*(i+1)]
-	}
-	return true
+func RunDPA(entitycontents []byte, iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter), vendor string, algorithm string) error {
+	return _runDPA(entitycontents, iz, cb, vendor, algorithm)
 }
 
 // TOFMeasure is a single time of flight measurement. The time of the measurement
-// is ingerited from the OutputData that contains it
+// is inherited from the OutputData that contains it
 type TOFMeasure struct {
 	// SRC is the index [0,4) of the ASIC that emitted the chirp
 	Src int `msgpack:"src"`
@@ -212,9 +79,11 @@ type TOFMeasure struct {
 
 type VelocityMeasure struct {
 	//Velocity in m/s
+	// Positive X should be due north in cases where that is known
 	X float64 `msgpack:"x"`
+	// Positive Y should be due east in cases where that is known
 	Y float64 `msgpack:"y"`
-	//Z is the vertical dimension
+	// Positive Z should be up
 	Z float64 `msgpack:"z"`
 }
 
@@ -236,10 +105,12 @@ type OutputData struct {
 	// The set of velocities in this output data set
 	Velocities []VelocityMeasure `msgpack:"velocities"`
 	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
-	Extradata     []string `msgpack:"extradata"`
-	Uncorrectable int      `msgpack:"uncorrectable"`
-	Correctable   int      `msgpack:"correctable"`
-	Total         int      `msgpack:"total"`
+	Extradata []string `msgpack:"extradata"`
+
+	// Information about the signal quality to the anemometer, this gets filled in automatically
+	Uncorrectable int `msgpack:"uncorrectable"`
+	Correctable   int `msgpack:"correctable"`
+	Total         int `msgpack:"total"`
 }
 
 // Emitter is used to report OutputData that you have generated
