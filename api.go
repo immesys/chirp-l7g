@@ -70,10 +70,12 @@ func RunDPA(iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emi
 	a.Vendor = vendor
 	a.Algorithm = algorithm
 	cl.SetEntityFromEnvironOrExit()
+	fmt.Printf("doing sub \n")
 	ch := cl.SubscribeOrExit(&bw2bind.SubscribeParams{
-		URI:       "ucberkeley/sasc/+/s.hamilton/+/i.l7g/signal/raw",
+		URI:       "ucberkeley/sasc/+/s.hamilton/+/i.l7g/signal/dedup",
 		AutoChain: true,
 	})
+	fmt.Printf("sub done\n")
 	a.Initialize(&a)
 	lastseq := make(map[string]int)
 	a.Uncorrectable = make(map[string]int)
