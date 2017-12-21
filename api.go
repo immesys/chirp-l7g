@@ -59,6 +59,14 @@ type ChirpHeader struct {
 	Humidity float64
 }
 
+//The framework will buffer a set of consecutive readings with primary=0,1,2,3
+//and only deliver those once it knows if they are present or not. If some are
+//missing, it will still invoke the OnNewData function but IsSetComplete will
+//be false
+func (c *ChirpHeader) IsCompleteSet() bool {
+	return true //TODO
+}
+
 // RunDPA will execute a data processing algorithm. Pass it a function that will be invoked whenever
 // new data arrives. You must pass it an initializer function, an on-data funchion and then
 // your name (the vendor) and the name of the algorithm. This function does not return
