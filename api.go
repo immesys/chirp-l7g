@@ -122,6 +122,8 @@ type VelocityMeasure struct {
 	Phi float64 `msgpack:"phi"`
 	// Theta, the polar angle is the degrees from vertical
 	Theta float64 `msgpack:"theta"`
+	// If false, ignore these fields
+	Valid bool `msgpack:"valid"`
 }
 
 // OutputData encapsulates a single set of measurements taken at roughly the same
@@ -144,7 +146,7 @@ type OutputData struct {
 	Temperatures []TempMeasure `msgpack:"temps"`
 
 	// The set of velocities in this output data set
-	Velocities []VelocityMeasure `msgpack:"velocities"`
+	Velocities VelocityMeasure `msgpack:"velocities"`
 
 	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
 	Extradata []string `msgpack:"extradata"`
