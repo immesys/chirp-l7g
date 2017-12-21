@@ -2,8 +2,7 @@ package chirpl7g
 
 // L7GHeader encapsulates information added by the layer 7 gateway point of presence
 type L7GHeader struct {
-	// The site that this data is from
-	Site string `msgpack:"-"`
+
 	// The MAC (8 bytes) of the sending anemometer, hex encoded
 	Srcmac string `msgpack:"srcmac"`
 	// The source ipv6 address of the sending anemometer, may not be globally routed
@@ -20,6 +19,21 @@ type L7GHeader struct {
 	Lqi int `msgpack:"lqi"`
 	// The raw payload of the packet, you should not need this as this is decoded into the ChirpHeader structure for you
 	Payload []byte `msgpack:"payload"`
+}
+
+type SetInfo struct {
+	// The site that this data is from
+	Site string
+	// This is the MAC address of the device this set belongs to
+	MAC string
+	// This is the build version of this device
+	Build int
+	// False if there is one or missing pieces of data
+	Complete bool
+}
+
+func (si *SetInfo) IsDuct() bool {
+	return si.Build%5 == 5
 }
 
 // ChirpHeader encapsulates the raw information transmitted by the anemometer.
@@ -85,6 +99,15 @@ type TOFMeasure struct {
 	Val float64 `msgpack:"val"`
 }
 
+type TempMeasure struct {
+	// SRC is the index [0,4) of the ASIC that emitted the chirp
+	Src int `msgpack:"src"`
+	// DST is the index [0,4) of the ASIC that the TOF was read from
+	Dst int `msgpack:"dst"`
+	// Val is the temperature, in celsius
+	Val float64 `msgpack:"val"`
+}
+
 type VelocityMeasure struct {
 	//Velocity in m/s
 	// Positive X should be due north in cases where that is known
@@ -114,10 +137,15 @@ type OutputData struct {
 	// The symbol name of the algorithm, including version, parameters. also variable characters only
 	// This gets set to the value passed to RunDPA automatically
 	Algorithm string `msgpack:"algorithm"`
+
 	// The set of time of flights in this output data set
 	Tofs []TOFMeasure `msgpack:"tofs"`
+	// The derived temperatures on each path
+	Temperatures []TempMeasure `msgpack:"temps"`
+
 	// The set of velocities in this output data set
 	Velocities []VelocityMeasure `msgpack:"velocities"`
+
 	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
 	Extradata []string `msgpack:"extradata"`
 
