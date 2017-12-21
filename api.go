@@ -81,10 +81,16 @@ type VelocityMeasure struct {
 	//Velocity in m/s
 	// Positive X should be due north in cases where that is known
 	X float64 `msgpack:"x"`
-	// Positive Y should be due east in cases where that is known
+	// Positive Y should be due west in cases where that is known
 	Y float64 `msgpack:"y"`
 	// Positive Z should be up
 	Z float64 `msgpack:"z"`
+	// Mag is the magnitude of the velocity vector in m/s
+	Mag float64 `msgpack:"m"`
+	// Phi, the azimuthal angle is the degrees counterclockwize from North (X)
+	Phi float64 `msgpack:"phi"`
+	// Theta, the polar angle is the degrees from vertical
+	Theta float64 `msgpack:"theta"`
 }
 
 // OutputData encapsulates a single set of measurements taken at roughly the same
