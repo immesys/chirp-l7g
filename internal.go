@@ -21,14 +21,14 @@ type dataProcessingAlgorithm struct {
 	BWCL          *bw2bind.BW2Client
 	Vendor        string
 	Algorithm     string
-	Process       func(popHdr *L7GHeader, h *ChirpHeader, e Emitter)
+	Process       func(info *SetInfo, popHdr []*L7GHeader, h []*ChirpHeader, e Emitter)
 	Initialize    func(e Emitter)
 	Uncorrectable map[string]int
 	Total         map[string]int
 	Correctable   map[string]int
 }
 
-func runDPA(entitycontents []byte, iz func(e Emitter), cb func(popHdr *L7GHeader, h *ChirpHeader, e Emitter), vendor string, algorithm string) error {
+func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, popHdr []*L7GHeader, h []*ChirpHeader, e Emitter), vendor string, algorithm string) error {
 	infoc := color.New(color.FgBlue, color.Bold)
 	errc := color.New(color.FgRed, color.Bold)
 	go func() {
