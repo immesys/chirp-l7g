@@ -2,12 +2,13 @@ package chirpl7g
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/fatih/color"
 	"github.com/immesys/ragent/ragentlib"
 
@@ -26,8 +27,13 @@ type dataProcessingAlgorithm struct {
 	Uncorrectable map[string]int
 	Total         map[string]int
 	Correctable   map[string]int
+	LastRawInput  map[string]RawInputData
+	EmitToStdout  bool
 }
 
+func (a *dataProcessingAlgorithm) MirrorToStandardOutput(v bool) {
+	a.EmitToStdout = v
+}
 func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, popHdr []*L7GHeader, h []*ChirpHeader, e Emitter), vendor string, algorithm string) error {
 	infoc := color.New(color.FgBlue, color.Bold)
 	errc := color.New(color.FgRed, color.Bold)
@@ -52,12 +58,13 @@ func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, po
 	a.Process = cb
 	a.Initialize = iz
 	a.Vendor = vendor
+	a.LastRawInput = make(map[string]RawInputData)
 	a.Algorithm = algorithm
-	_, err = cl.SetEntity(entitycontents)
+	vk, err := cl.SetEntity(entitycontents[1:])
 	if err != nil {
 		return err
 	}
-
+	fmt.Printf("our VK is %v\n", vk)
 	infoc.Printf("tapping hamilton feeds\n")
 	ch, err := cl.Subscribe(&bw2bind.SubscribeParams{
 		URI:       fmt.Sprintf("ucberkeley/anem/+/+/s.hamilton/+/i.l7g/signal/raw"),
@@ -71,7 +78,6 @@ func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, po
 	}
 
 	a.Initialize(&a)
-	lastseq := make(map[string]int)
 	a.Uncorrectable = make(map[string]int)
 	a.Total = make(map[string]int)
 
@@ -85,8 +91,23 @@ func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, po
 			}
 		}
 	}()
+	a.handleIncomingData(procCH)
+	fmt.Fprintf(os.Stderr, "HIC returned\n")
+	return errors.New("could not consume data fast enough")
+}
 
-	for m := range procCH {
+func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMessage) {
+
+	batchInfo := make(map[string]*SetInfo)
+	batchL7G := make(map[string][]*L7GHeader)
+	batchChirp := make(map[string][]*ChirpHeader)
+	lastseq := make(map[string]int)
+
+	for m := range in {
+		//m.Dump()
+		parts := strings.Split(m.URI, "/")
+		site := parts[2]
+
 		po := m.GetOnePODF(bw2bind.PODFL7G1Raw).(bw2bind.MsgPackPayloadObject)
 		h := L7GHeader{}
 		po.ValueInto(&h)
@@ -106,22 +127,78 @@ func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, po
 		if !isAnemometer {
 			continue
 		}
-		lastseqi, ok := lastseq[h.Srcmac]
+
+		did := h.Srcmac
+
+		lastseqi, ok := lastseq[did]
 		if !ok {
-			lastseqi = int(ch.Seqno - 1)
+			lastseqi = int(ch.Seqno - 10)
 		}
 		uncorrectablei, ok := a.Uncorrectable[h.Srcmac]
 		if !ok {
 			uncorrectablei = 0
 		}
+		lastseqi &= 0xFFFF
+		lastsegment := lastseqi / 4
+		currentsegment := ch.Seqno / 4
+
+		if int(currentsegment) != int(lastsegment) {
+			//Send the last segment if it is not nil
+			l7g := batchL7G[did]
+			hdr := batchChirp[did]
+			info := batchInfo[did]
+			if !(info == nil || hdr == nil || l7g == nil) {
+				//Maybe we have to send
+				mustsend := false
+				for i := 0; i < 4; i++ {
+					if hdr[i] != nil {
+						mustsend = true
+					}
+				}
+				if mustsend {
+					complete := true
+					var t time.Time
+					hast := false
+					for i := 0; i < 4; i++ {
+						if l7g[i] == nil {
+							complete = false
+						} else if !hast {
+							t = time.Unix(0, l7g[i].Brtime)
+							hast = true
+						}
+					}
+					info.Complete = complete
+					info.TimeOfFirst = t
+					ri := RawInputData{
+						SetInfo:      info,
+						L7GHeaders:   l7g,
+						ChirpHeaders: hdr,
+					}
+					a.LastRawInput[did] = ri
+					a.Process(info, l7g, hdr, a)
+				}
+			}
+			batchL7G[did] = make([]*L7GHeader, 4)
+			batchChirp[did] = make([]*ChirpHeader, 4)
+			batchInfo[did] = &SetInfo{
+				Site:   site,
+				MAC:    did,
+				Build:  ch.Build,
+				IsDuct: ch.Build%10 == 5,
+			}
+		}
+
+		//Save the sequence number
 		lastseqi++
 		lastseqi &= 0xFFFF
 		if int(ch.Seqno) != lastseqi {
 			uncorrectablei++
-			lastseqi = int(ch.Seqno)
 		}
+		lastseqi = int(ch.Seqno)
 		lastseq[h.Srcmac] = lastseqi
 		a.Uncorrectable[h.Srcmac] = uncorrectablei
+
+		//Save the total packets
 		totali, ok := a.Total[h.Srcmac]
 		if !ok {
 			totali = 0
@@ -129,17 +206,22 @@ func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, po
 		totali++
 		a.Total[h.Srcmac] = totali
 
-		a.Process(&h, &ch, &a)
+		//Save this header
+		batchL7G[did][ch.Primary] = &h
+		batchChirp[did][ch.Primary] = &ch
 	}
-	return errors.New("could not consume data fast enough")
 }
 func (a *dataProcessingAlgorithm) Data(od OutputData) {
 	od.Vendor = a.Vendor
 	od.Algorithm = a.Algorithm
-	URI := fmt.Sprintf("ucberkeley/anemometer/data/%s/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm, od.Sensor)
+
 	od.Uncorrectable, _ = a.Uncorrectable[od.Sensor]
 	od.Total, _ = a.Total[od.Sensor]
 	od.Correctable, _ = a.Correctable[od.Sensor]
+	od.RawInput = a.LastRawInput[od.Sensor]
+	//spew.Dump(a.LastRawInput)
+	//spew.Dump(od)
+	URI := fmt.Sprintf("ucberkeley/anem/%s/%s/%s/s.anemometer/%s/i.anemometerdata/signal/feed", od.Vendor, od.Algorithm, od.RawInput.SetInfo.Site, od.Sensor)
 	po, err := bw2bind.CreateMsgPackPayloadObject(bw2bind.PONumChirpFeed, od)
 	if err != nil {
 		panic(err)
@@ -155,9 +237,16 @@ func (a *dataProcessingAlgorithm) Data(od OutputData) {
 		Persist:        doPersist,
 	})
 	if err != nil {
-		fmt.Println("Got publish error: ", err)
+		fmt.Fprintf(os.Stderr, "Got publish error: %v\n", err)
 	} else {
 		//fmt.Println("Publish ok")
+	}
+	if a.EmitToStdout {
+		data, err := json.Marshal(od)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("MIRROR_STDOUT:" + string(data))
 	}
 }
 
@@ -209,24 +298,25 @@ func check_xor(seqno int, arr []byte) {
 func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 	//Drop the type info we added
 	if arr[0] != 9 {
-		fmt.Printf("in load chirp, type is %d\n", arr[0])
 		return false
 	}
 	h.Type = int(arr[1])
 	h.Seqno = binary.LittleEndian.Uint16(arr[2:])
 
 	if h.Type > 15 {
-		check_xor(int(h.Seqno), arr)
+		//check_xor(int(h.Seqno), arr)
 		return false
 	}
 
 	var paritycheck uint8 = 0
-
+	for _, b := range arr {
+		paritycheck ^= b
+	}
 	if paritycheck != 0 {
-		fmt.Printf("Received packet failed parity check, ignoring %d\n", paritycheck)
-		expected_seqnos := arr[2] ^ (arr[2] - 1) ^ (arr[2] - 2) ^ (arr[2] - 3)
-		fmt.Printf("B: %d\n", paritycheck^arr[2])
-		fmt.Printf("C: %d\n", expected_seqnos)
+		fmt.Fprintf(os.Stderr, "Received packet failed parity check, ignoring %d\n", paritycheck)
+		//expected_seqnos := arr[2] ^ (arr[2] - 1) ^ (arr[2] - 2) ^ (arr[2] - 3)
+		//fmt.Printf("B: %d\n", paritycheck^arr[2])
+		//fmt.Printf("C: %d\n", expected_seqnos)
 		return false
 	}
 	xormap[int(h.Seqno)] = arr
@@ -292,6 +382,6 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 	h.Humidity = float64(f_hdc_rh) / 100.0
 	h.Temperature = float64(f_hdc_tmp) / 100.0
 	//fmt.Printf("Received frame:\n")
-	spew.Dump(h)
+	//spew.Dump(h)
 	return true
 }

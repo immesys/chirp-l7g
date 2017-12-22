@@ -1,5 +1,7 @@
 package chirpl7g
 
+import "time"
+
 // L7GHeader encapsulates information added by the layer 7 gateway point of presence
 type L7GHeader struct {
 
@@ -30,10 +32,10 @@ type SetInfo struct {
 	Build int
 	// False if there is one or missing pieces of data
 	Complete bool
-}
-
-func (si *SetInfo) IsDuct() bool {
-	return si.Build%5 == 5
+	// The time of the first found segment
+	TimeOfFirst time.Time
+	// Duct vs room
+	IsDuct bool
 }
 
 // ChirpHeader encapsulates the raw information transmitted by the anemometer.
@@ -118,39 +120,50 @@ type VelocityMeasure struct {
 	Valid bool `msgpack:"valid"`
 }
 
+type RawInputData struct {
+	L7GHeaders   []*L7GHeader
+	ChirpHeaders []*ChirpHeader
+	SetInfo      *SetInfo
+}
+
 // OutputData encapsulates a single set of measurements taken at roughly the same
 // time
 type OutputData struct {
 	// The time, in nanoseconds since the epoch, that this set of measurements was taken
-	Timestamp int64 `msgpack:"time"`
+	Timestamp int64
 	// The symbol name of the sensor (like a variable name, no spaces etc)
-	Sensor string `msgpack:"sensor"`
+	Sensor string
 	// The name of the vendor (you) that wrote the data processing algorithm, also variable characters only
 	// This gets set to the value passed to RunDPA automatically
-	Vendor string `msgpack:"vendor"`
+	Vendor string
 	// The symbol name of the algorithm, including version, parameters. also variable characters only
 	// This gets set to the value passed to RunDPA automatically
-	Algorithm string `msgpack:"algorithm"`
+	Algorithm string
 
 	// The set of time of flights in this output data set
-	Tofs []TOFMeasure `msgpack:"tofs"`
+	Tofs []TOFMeasure
+
+	RawInput RawInputData
+
 	// The derived temperatures on each path
-	Temperatures []TempMeasure `msgpack:"temps"`
+	Temperatures []TempMeasure
 
 	// The set of velocities in this output data set
-	Velocities VelocityMeasure `msgpack:"velocities"`
+	Velocities VelocityMeasure
 
 	// Any extra string messages (like X is malfunctioning), these are displayed in the log on the UI
-	Extradata []string `msgpack:"extradata"`
+	Extradata []string
 
 	// Information about the signal quality to the anemometer, this gets filled in automatically
-	Uncorrectable int `msgpack:"uncorrectable"`
-	Correctable   int `msgpack:"correctable"`
-	Total         int `msgpack:"total"`
+	Uncorrectable int
+	Correctable   int
+	Total         int
 }
 
 // Emitter is used to report OutputData that you have generated
 type Emitter interface {
 	// Emit an output data set
 	Data(OutputData)
+	// Configure subsequent Data calls to print to standard out as well
+	MirrorToStandardOutput(bool)
 }
