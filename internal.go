@@ -129,7 +129,10 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 		}
 
 		did := h.Srcmac
-
+		numasics := 4
+		if ch.Build%10 == 7 {
+			numasics = 6
+		}
 		lastseqi, ok := lastseq[did]
 		if !ok {
 			lastseqi = int(ch.Seqno - 10)
@@ -141,6 +144,10 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 		lastseqi &= 0xFFFF
 		lastsegment := lastseqi / 4
 		currentsegment := ch.Seqno / 4
+		if ch.Build%10 == 7 {
+			lastsegment = lastseqi / 8
+			currentsegment = ch.Seqno / 8
+		}
 
 		if int(currentsegment) != int(lastsegment) {
 			//Send the last segment if it is not nil
@@ -150,7 +157,7 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 			if !(info == nil || hdr == nil || l7g == nil) {
 				//Maybe we have to send
 				mustsend := false
-				for i := 0; i < 4; i++ {
+				for i := 0; i < numasics; i++ {
 					if hdr[i] != nil {
 						mustsend = true
 					}
@@ -159,7 +166,7 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 					complete := true
 					var t time.Time
 					hast := false
-					for i := 0; i < 4; i++ {
+					for i := 0; i < numasics; i++ {
 						if l7g[i] == nil {
 							complete = false
 						} else if !hast {
@@ -178,13 +185,15 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 					a.Process(info, l7g, hdr, a)
 				}
 			}
-			batchL7G[did] = make([]*L7GHeader, 4)
-			batchChirp[did] = make([]*ChirpHeader, 4)
+			batchL7G[did] = make([]*L7GHeader, numasics)
+			batchChirp[did] = make([]*ChirpHeader, numasics)
 			batchInfo[did] = &SetInfo{
-				Site:   site,
-				MAC:    did,
-				Build:  ch.Build,
-				IsDuct: ch.Build%10 == 5,
+				Site:    site,
+				MAC:     did,
+				Build:   ch.Build,
+				IsDuct:  ch.Build%10 == 5,
+				IsRoom:  ch.Build%10 == 0,
+				IsDuct6: ch.Build%10 == 7,
 			}
 		}
 
@@ -192,6 +201,7 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 		lastseqi++
 		lastseqi &= 0xFFFF
 		if int(ch.Seqno) != lastseqi {
+			//TODO this is not valid for 6 channel
 			uncorrectablei++
 		}
 		lastseqi = int(ch.Seqno)
@@ -300,6 +310,7 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 	if arr[0] != 9 {
 		return false
 	}
+
 	h.Type = int(arr[1])
 	h.Seqno = binary.LittleEndian.Uint16(arr[2:])
 
@@ -321,10 +332,14 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 	}
 	xormap[int(h.Seqno)] = arr
 	h.Build = int(arr[5])
+	numasics := 4
+	if h.Build%10 == 7 {
+		numasics = 6
+	}
 	h.CalPulse = 160
 	h.Primary = arr[4]
-	h.CalRes = make([]int, 4)
-	for i := 0; i < 4; i++ {
+	h.CalRes = make([]int, numasics)
+	for i := 0; i < numasics; i++ {
 		if i == (int(h.Primary)) {
 			h.CalRes[i] = int(binary.LittleEndian.Uint16(arr[26:]))
 		} else {
@@ -332,14 +347,28 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 		}
 	}
 
-	h.MaxIndex = make([]int, 4)
-	h.IValues = make([][]int, 4)
-	h.QValues = make([][]int, 4)
+	h.MaxIndex = make([]int, numasics)
+	h.IValues = make([][]int, numasics)
+	h.QValues = make([][]int, numasics)
 	offset := 0
-	for i := 0; i < 4; i++ {
-		if i == int(h.Primary) {
-			h.MaxIndex[i] = -1
-			continue
+	//fmt.Printf("arr: %x\n", arr)
+
+	for i := 0; i < numasics; i++ {
+		if h.Build%10 == 5 || h.Build%10 == 0 {
+			if i == int(h.Primary) {
+				h.MaxIndex[i] = -1
+				continue
+			}
+		}
+		if h.Build%10 == 7 {
+			if int(h.Primary) < 3 && i < 3 {
+				h.MaxIndex[i] = -1
+				continue
+			}
+			if int(h.Primary) >= 3 && i >= 3 {
+				h.MaxIndex[i] = -1
+				continue
+			}
 		}
 		h.MaxIndex[i] = int(arr[22+offset])
 		h.IValues[i] = make([]int, 4)
@@ -357,8 +386,8 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 	f_mag_x := int16(binary.LittleEndian.Uint16(arr[12:]))
 	f_mag_y := int16(binary.LittleEndian.Uint16(arr[14:]))
 	f_mag_z := int16(binary.LittleEndian.Uint16(arr[16:]))
-	f_hdc_tmp := int16(binary.LittleEndian.Uint16(arr[18:]))
-	f_hdc_rh := binary.LittleEndian.Uint16(arr[20:])
+	//f_hdc_tmp := int16(binary.LittleEndian.Uint16(arr[18:]))
+	//f_hdc_rh := binary.LittleEndian.Uint16(arr[20:])
 
 	if f_acc_x >= 8192 {
 		f_acc_x -= 16384
@@ -379,8 +408,8 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 		float64(f_mag_y) * 0.1,
 		float64(f_mag_z) * 0.1,
 	}
-	h.Humidity = float64(f_hdc_rh) / 100.0
-	h.Temperature = float64(f_hdc_tmp) / 100.0
+	//h.Humidity = float64(f_hdc_rh) / 100.0
+	//h.Temperature = float64(f_hdc_tmp) / 100.0
 	//fmt.Printf("Received frame:\n")
 	//spew.Dump(h)
 	return true

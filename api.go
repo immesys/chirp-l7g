@@ -34,8 +34,12 @@ type SetInfo struct {
 	Complete bool
 	// The time of the first found segment
 	TimeOfFirst time.Time
-	// Duct vs room
+	// 4 channel duct
 	IsDuct bool
+	// 6 channel duct
+	IsDuct6 bool
+	// 4 channel room
+	IsRoom bool
 }
 
 // ChirpHeader encapsulates the raw information transmitted by the anemometer.
@@ -68,11 +72,6 @@ type ChirpHeader struct {
 	Accelerometer []float64
 	// The magnetometer values X,Y,Z in micro tesla
 	Magnetometer []float64
-
-	// Air temperature as measured by the Hamilton in Celsius
-	Temperature float64
-	// Air relative humidity as measured by the hamilton in percent
-	Humidity float64
 }
 
 // RunDPA will execute a data processing algorithm. Pass it a function that will be invoked whenever
