@@ -16,7 +16,7 @@ import (
 )
 
 const serverVK = "MT3dKUYB8cnIfsbnPrrgy8Cb_8whVKM-Gtg2qd79Xco="
-const serverIP = "54.215.229.112:28590"
+const serverIP = "wave-ragent-974638466.us-west-1.elb.amazonaws.com:28590"
 
 type dataProcessingAlgorithm struct {
 	BWCL          *bw2bind.BW2Client
