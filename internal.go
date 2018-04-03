@@ -66,8 +66,12 @@ func runDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, po
 	}
 	fmt.Printf("our VK is %v\n", vk)
 	infoc.Printf("tapping hamilton feeds\n")
+	sitestring := "+"
+	if os.Getenv("SITE_FILTER") != "" {
+		sitestring = os.Getenv("SITE_FILTER")
+	}
 	ch, err := cl.Subscribe(&bw2bind.SubscribeParams{
-		URI:       fmt.Sprintf("ucberkeley/anem/+/+/s.hamilton/+/i.l7g/signal/raw"),
+		URI:       fmt.Sprintf("ucberkeley/anem/%s/+/s.hamilton/+/i.l7g/signal/raw", sitestring),
 		AutoChain: true,
 	})
 	if err == nil {
