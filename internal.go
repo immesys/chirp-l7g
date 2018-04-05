@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fatih/color"
@@ -116,7 +117,7 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 		h := L7GHeader{}
 		po.ValueInto(&h)
 		if h.Payload[0] != 9 {
-			//fmt.Printf("Skipping l7g packet type %d\n", h.Payload[0])
+			fmt.Printf("Skipping l7g packet type %d\n", h.Payload[0])
 			continue
 		}
 
@@ -127,8 +128,10 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 		// }
 
 		ch := ChirpHeader{}
+
 		isAnemometer := loadChirpHeader(h.Payload, &ch)
 		if !isAnemometer {
+			fmt.Printf("is not anemometer\n")
 			continue
 		}
 
@@ -223,6 +226,9 @@ func (a *dataProcessingAlgorithm) handleIncomingData(in chan *bw2bind.SimpleMess
 		//Save this header
 		batchL7G[did][ch.Primary] = &h
 		batchChirp[did][ch.Primary] = &ch
+
+		//Check for recovered packets
+		df
 	}
 }
 func (a *dataProcessingAlgorithm) Data(od OutputData) {
@@ -288,15 +294,20 @@ typedef struct __attribute__((packed))
   uint8_t data[3][16];  //28:75
 } measure_set_t; //76 bytes
 */
-var xormap map[int][]byte
+var xormap_actual map[int][]byte
+var xormap_parity map[int][]byte
+var xormu sync.Mutex
 
 func init() {
-	xormap = make(map[int][]byte)
+	xormap_actual = make(map[int][]byte)
+	xormap_parity = make(map[int][]byte)
 }
 func check_xor(seqno int, arr []byte) {
+	xormu.Lock()
+	defer xormu.Unlock()
 	cmp := make([]byte, len(arr))
 	for i := 0; i < 4; i++ {
-		thisbuf, ok := xormap[seqno-i]
+		thisbuf, ok := xormap_actual[seqno-i]
 		if !ok {
 			return
 		}
@@ -307,9 +318,83 @@ func check_xor(seqno int, arr []byte) {
 	for x := 0; x < len(arr); x++ {
 		cmp[x] ^= arr[x]
 	}
-	//fmt.Printf("XOR RESULT: %x\n", cmp)
+	fmt.Printf("XOR RESULT: %x\n", cmp)
 }
-func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
+func insert_xor(seqno int, arr []byte) {
+	xormu.Lock()
+	defer xormu.Unlock()
+	xormap_parity[seqno] = arr
+}
+func w(seqno int) int {
+	return seqno & 0xFFFF
+}
+func recurse_xor(seqno int) {
+	xormu.Lock()
+	defer xormu.Unlock()
+	parity, ok := xormap_parity[seqno]
+	if !ok {
+		return
+	}
+	cmp := make([]byte, 76)
+	copy(cmp[:], parity[:])
+	var missingseqno int
+	var nmissing int
+	for i := 0; i < 4; i++ {
+		thisbuf, ok := xormap_actual[w(seqno-i)]
+		if !ok {
+			nmissing++
+			missingseqno = w(seqno - i)
+			continue
+		}
+		for x := 0; x < len(cmp); x++ {
+			cmp[x] ^= thisbuf[x]
+		}
+	}
+	if nmissing == 0 {
+		return
+	}
+	if nmissing > 1 {
+		return
+	}
+	fmt.Printf("recovered a packet\n")
+	recovered := cmp
+	recovered[0] = 9
+	recovered[1] = 1
+	recovered[2] = byte(missingseqno & 0xff)
+	recovered[3] = byte(missingseqno >> 8)
+	xormap_actual[missingseqno] = recovered
+}
+func insertChirpHeader(arr []byte) int {
+	if arr[0] != 9 {
+		return
+	}
+
+	Type := int(arr[1])
+	seqno := binary.LittleEndian.Uint16(arr[2:])
+
+	if Type > 15 {
+		insert_xor(int(seqno), arr)
+		//check_xor(int(h.Seqno), arr)
+		recurse_xor(int(seqno))
+		return -1
+	}
+	var paritycheck uint8 = 0
+	for _, b := range arr {
+		paritycheck ^= b
+	}
+	if paritycheck != 0 {
+		return -1
+	}
+	xormu.Lock()
+	xormap_actual[int(seqno)] = arr
+	xormu.Unlock()
+	return seqno
+}
+func loadChirpHeader(seqno int, h *ChirpHeader) bool {
+
+	xormu.Lock()
+	arr := xormal_actual[seqno]
+	xormu.Unlock()
 	//Drop the type info we added
 	if arr[0] != 9 {
 		return false
@@ -319,7 +404,9 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 	h.Seqno = binary.LittleEndian.Uint16(arr[2:])
 
 	if h.Type > 15 {
+		insert_xor(int(h.Seqno), arr)
 		//check_xor(int(h.Seqno), arr)
+		extraarr := recurse_xor(int(h.Seqno))
 		return false
 	}
 
@@ -334,7 +421,9 @@ func loadChirpHeader(arr []byte, h *ChirpHeader) bool {
 		//fmt.Printf("C: %d\n", expected_seqnos)
 		return false
 	}
-	xormap[int(h.Seqno)] = arr
+	xormu.Lock()
+	xormap_actual[int(h.Seqno)] = arr
+	xormu.Unlock()
 	h.Build = int(arr[5])
 	numasics := 4
 	if h.Build%10 == 7 {
