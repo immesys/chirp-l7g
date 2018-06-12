@@ -68,17 +68,27 @@ type ChirpHeader struct {
 	IValues [][]int
 	QValues [][]int
 
+	// The Full IQ values, if available
+	FullIValues [][]int
+	FullQValues [][]int
+
 	// The accelerometer values, X,Y,Z in milli G
 	Accelerometer []float64
 	// The magnetometer values X,Y,Z in micro tesla
 	Magnetometer []float64
+
+	// The external temperature sensor
+	Temperature *float64
+
+	// Time of flight scale factors
+	TOFSF []int
 }
 
 // RunDPA will execute a data processing algorithm. Pass it a function that will be invoked whenever
 // new data arrives. You must pass it an initializer function, an on-data funchion and then
 // your name (the vendor) and the name of the algorithm. This function does not return
-func RunDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, popHdr []*L7GHeader, h []*ChirpHeader, e Emitter), vendor string, algorithm string) error {
-	return runDPA(entitycontents, iz, cb, vendor, algorithm)
+func RunDPA(entitycontents []byte, iz func(e Emitter), cb func(info *SetInfo, popHdr []*L7GHeader, h []*ChirpHeader, e Emitter), vendor string, algorithm string, local string) error {
+	return runDPA(entitycontents, iz, cb, vendor, algorithm, local)
 }
 
 // TOFMeasure is a single time of flight measurement. The time of the measurement
@@ -154,9 +164,7 @@ type OutputData struct {
 	Extradata []string
 
 	// Information about the signal quality to the anemometer, this gets filled in automatically
-	Uncorrectable int
-	Correctable   int
-	Total         int
+	Total int
 }
 
 // Emitter is used to report OutputData that you have generated
