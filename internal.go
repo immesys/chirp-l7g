@@ -471,6 +471,7 @@ func loadChirpHeader(arr []byte, h *ChirpHeader, iqarray []byte) bool {
 			}
 		}
 		h.MaxIndex[i] = int(arr[22+offset])
+		//fmt.Printf("Max Index [%d-%d] %d\n", h.Primary, i, h.MaxIndex[i])
 		h.IValues[i] = make([]int, 4)
 		h.QValues[i] = make([]int, 4)
 		if iqarray != nil {
